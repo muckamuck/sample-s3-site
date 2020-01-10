@@ -1,0 +1,297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Sample S3/APIG integration with IAM role
+Parameters:
+  s3BucketARN:
+    Type: String
+  s3BucketName:
+    Type: String
+  EnvDomainName:
+    Type: String
+  HZoneId:
+    Type: String
+  AcmCertArn:
+    Type: String
+Resources:
+  apigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: s3-example-apig-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      MaxSessionDuration: 4320
+      Policies:
+        - PolicyName: create-logs-and-s3-actions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                  - s3:GetObjectAcl
+                  - s3:GetObjectTagging
+                  - s3:GetObjectVersion
+                Resource:
+                  Fn::Join:
+                    - /
+                    - - Ref: s3BucketARN
+                      - '*'
+              - Effect: Allow
+                Action:
+                  - s3:HeadBucket
+                  - s3:ListBucket
+                Resource:
+                  Ref: s3BucketARN
+  ApigDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      CertificateArn:
+        Ref: AcmCertArn
+      DomainName:
+        Ref: EnvDomainName
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  R53Entry:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId:
+        Ref: HZoneId
+      RecordSets:
+        - Name:
+            Ref: EnvDomainName
+          Type: CNAME
+          TTL: '900'
+          ResourceRecords:
+            - Fn::GetAtt:
+                - ApigDomain
+                - DistributionDomainName
+  theApigApi:
+    DependsOn: ApigDomain
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Body:
+        openapi: 3.0.1
+        info:
+          title: s3-example
+          version: '2019-03-06T18:28:47Z'
+        paths:
+          /{proxy+}:
+            options:
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Methods:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Headers:
+                      schema:
+                        type: string
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Empty'
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: '''DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'''
+                      method.response.header.Access-Control-Allow-Headers: '''Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'''
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                passthroughBehavior: when_no_match
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                type: mock
+            x-amazon-apigateway-any-method:
+              parameters:
+                - name: proxy
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Content-Encoding:
+                      schema:
+                        type: string
+                    Content-Length:
+                      schema:
+                        type: string
+                    Content-Type:
+                      schema:
+                        type: string
+                  content: {}
+                '404':
+                  description: "404 response"
+              x-amazon-apigateway-integration:
+                credentials:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/s3-example-apig-role
+                uri: arn:aws:apigateway:us-east-1:s3:path/{bucket}/{proxy}
+                responses:
+                  4\d{2}:
+                    statusCode: "404"
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Content-Type: integration.response.header.Content-Type
+                      method.response.header.Content-Length: integration.response.header.Content-Length
+                      method.response.header.Content-Encoding: integration.response.header.Content-Encoding
+                    contentHandling: CONVERT_TO_BINARY
+                requestParameters:
+                  integration.request.path.proxy: method.request.path.proxy
+                  integration.request.path.bucket:
+                    Fn::Sub: '''${s3BucketName}'''
+                passthroughBehavior: when_no_match
+                httpMethod: GET
+                cacheNamespace: a8kdc0
+                cacheKeyParameters:
+                  - method.request.path.proxy
+                type: aws
+          /:
+            get:
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+                    Content-Encoding:
+                      schema:
+                        type: string
+                    Content-Length:
+                      schema:
+                        type: string
+                    Content-Type:
+                      schema:
+                        type: string
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Empty'
+              x-amazon-apigateway-integration:
+                credentials:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/s3-example-apig-role
+                uri: arn:aws:apigateway:us-east-1:s3:path/{bucket}/index.html
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Content-Type: integration.response.header.Content-Type
+                      method.response.header.Content-Length: integration.response.header.Content-Length
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Content-Encoding: integration.response.header.Content-Encoding
+                requestParameters:
+                  integration.request.path.bucket:
+                    Fn::Sub: '''${s3BucketName}'''
+                passthroughBehavior: when_no_match
+                httpMethod: GET
+                type: aws
+            options:
+              responses:
+                '200':
+                  description: 200 response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Methods:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Headers:
+                      schema:
+                        type: string
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Empty'
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: '''GET,OPTIONS'''
+                      method.response.header.Access-Control-Allow-Headers: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                passthroughBehavior: when_no_match
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                type: mock
+        components:
+          schemas:
+            Empty:
+              title: Empty Schema
+              type: object
+        x-amazon-apigateway-gateway-responses:
+          DEFAULT_4XX:
+            responseParameters:
+              gatewayresponse.header.Access-Control-Allow-Methods: '''GET,OPTIONS'''
+              gatewayresponse.header.Access-Control-Allow-Origin: '''*'''
+              gatewayresponse.header.Access-Control-Allow-Headers: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+          DEFAULT_5XX:
+            responseParameters:
+              gatewayresponse.header.Access-Control-Allow-Methods: '''GET,OPTIONS'''
+              gatewayresponse.header.Access-Control-Allow-Origin: '''*'''
+              gatewayresponse.header.Access-Control-Allow-Headers: '''Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'''
+        x-amazon-apigateway-binary-media-types:
+          - '*/*'
+      EndpointConfiguration:
+        Types:
+          - EDGE
+      FailOnWarnings: true
+      MinimumCompressionSize: 1024
+      Name: s3-example
+  theDeployment:
+    DependsOn: theApigApi
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId:
+        Ref: theApigApi
+      StageDescription:
+        MethodSettings:
+          - DataTraceEnabled: true
+            HttpMethod: '*'
+            LoggingLevel: INFO
+            MetricsEnabled: true
+            ResourcePath: /*
+        DataTraceEnabled: true
+        LoggingLevel: INFO
+        MetricsEnabled: true
+        TracingEnabled: true
+      StageName: stage
+  basePathMapping:
+    DependsOn: theDeployment
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      BasePath: ''
+      DomainName:
+        Ref: EnvDomainName
+      RestApiId:
+        Ref: theApigApi
+      Stage: stage
