@@ -147,15 +147,21 @@ Resources:
                       schema:
                         type: string
                   content: {}
-                '404':
-                  description: "404 response"
+                '301':
+                  description: "301 response"
+                  headers:
+                    Location:
+                      schema:
+                        type: string
               x-amazon-apigateway-integration:
                 credentials:
                   Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/s3-example-apig-role
                 uri: arn:aws:apigateway:us-east-1:s3:path/{bucket}/{proxy}
                 responses:
                   4\d{2}:
-                    statusCode: "404"
+                    statusCode: "301"
+                    responseParameters:
+                      method.response.header.Location: "'https://www.youtube.com'"
                   default:
                     statusCode: '200'
                     responseParameters:
